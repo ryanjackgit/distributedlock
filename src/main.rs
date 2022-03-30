@@ -223,7 +223,7 @@ impl Watcher for LoggingWatcher {
   
     let mut thread_handle=Vec::new();
 
-    for i in 0..100 {
+    for i in 0..10 {
 
      let root_path=format!("/{}",root_path);
      let res=  std::thread::spawn(move || {
