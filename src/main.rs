@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use zookeeper_async::{Acl, CreateMode, WatchedEvent, Watcher, ZooKeeper};
 use zookeeper_async::KeeperState;
+use zookeeper_async::ZooKeeperExt;
 
 use tracing::{debug,info,warn,error};
 
@@ -46,23 +47,31 @@ impl DistributedLock {
 
     let _auth = zk.add_auth("digest", vec![1, 2, 3, 4]).await;
 
-
+/*
     let exists = zk.exists(&root_path, false).await?;
     if exists.is_none() {
 
     debug!("No this named node, begin to create---");
-    let path = zk
-        .create(
+    if let Err(e) =zk.create(
             &root_path,
             vec![0],
             Acl::open_unsafe().clone(),
             CreateMode::Persistent,
         )
-        .await;
+        .await {
+            error!("created root error-> {:?}", e);
+        }
 
-        debug!("created -> {:?}", path);
+       
     }
-    
+*/
+
+
+    if let Err(e)=zk.ensure_path_with_leaf_mode(&root_path, CreateMode::Container).await {
+        error!("don't create root is {:?}",e);
+        return Err(e.into());
+    }
+
 
      let d_lock =  DistributedLock {
             zk:Arc::new(zk),
@@ -76,10 +85,8 @@ impl DistributedLock {
     }
 
     pub async fn try_lock(&mut self) -> anyhow::Result<bool> {
-        #![feature(map_first_last)]
+     
        use std::collections::BTreeSet;
-
- 
 
         let create_path=format!("{}/1",&self.root_path);
         let node_name = self.zk.create(
@@ -91,7 +98,7 @@ impl DistributedLock {
         .await;
 
         if let Err(e)=node_name {
-            error!("the error is {:?}",e);
+            error!("create children  error is {:?}",e);
             return Err(e.into());
         }
 
@@ -148,11 +155,19 @@ impl DistributedLock {
 
     pub async fn unlock(&mut self) -> anyhow::Result<()> {
 
-        let unlock_path=self.current_lock.clone().ok_or(anyhow::anyhow!("don't unlock ----"))?;
+        let unlock_path=self.current_lock.clone().ok_or(anyhow::anyhow!("self.current_lock is none "))?;
 
-      // self.zk.delete(&unlock_path, None).await?;
-      // close the connecton
-	   self.zk.close().await?;
+    
+       if let Err(error) = self.zk.delete(&unlock_path, None).await {
+        panic!("Couldn't remove lock {}, error is : {}", unlock_path, error);
+    }
+    
+/*
+    if let Err(e) = self.zk.close().await {
+        warn!("the connection is not closed----------");
+    };
+*/
+
        self.current_lock = None;   
  
        debug!("unlock successful-------{}",unlock_path);
@@ -177,7 +192,7 @@ impl DistributedLock {
         .await?;
 
         if stat.is_some() &&  rx.await.is_err() {
-            return Err(anyhow::anyhow!("get loss conntion"));
+            return Err(anyhow::anyhow!("get oneshot message  error"));
         }
 
 
@@ -223,8 +238,8 @@ impl Watcher for LoggingWatcher {
   
     let mut thread_handle=Vec::new();
 
-    for i in 0..10 {
-
+    for i in 0..100 {
+  
      let root_path=format!("/{}",root_path);
      let res=  std::thread::spawn(move || {
      
@@ -239,6 +254,8 @@ impl Watcher for LoggingWatcher {
            error!("the erris {:?}",e);
        }
       }
+
+     
 
        });
 
@@ -260,9 +277,11 @@ async fn lock_test(i:u32,root_path:String) ->anyhow::Result<()> {
     let zookeeper_host="0.0.0.0:2181".to_string();
 
     let  lock=DistributedLock::new(zookeeper_host,root_path).await;
+
    if let Ok(mut lock) = lock {
+
    if let Err(e) =lock.lock().await {
-       error!("the lock result e is {:?}",e);
+       error!("the .lock().await  result e is {:?}",e);
    }
 
     info!("exclusive  do business  ------------------------- i:{} ",i);
@@ -271,6 +290,8 @@ async fn lock_test(i:u32,root_path:String) ->anyhow::Result<()> {
     if let Err(e)=lock.unlock().await {
         error!("the unlock  is {:?}",e);
     }
+   } else {
+       error!("the DistributedLock object created error---------on one machine,too many connections,in real production,this isn't happen");
    }
 
     Ok(())
